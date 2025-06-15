@@ -2,6 +2,7 @@ from . import app
 import os
 import json
 import pymongo
+import logging
 from flask import jsonify, request, make_response, abort, url_for  # noqa; F401
 from pymongo import MongoClient
 from bson import json_util
@@ -51,3 +52,92 @@ def parse_json(data):
 ######################################################################
 # INSERT CODE HERE
 ######################################################################
+@app.route("/health", methods=["GET"])
+def health():
+    try:
+        # Verify MongoDB connection
+        client.admin.command('ping')
+        return jsonify({"status": "OK", "database": "connected"}), 200
+    except Exception as e:
+        return jsonify({"status": "Error", "error": str(e)}), 500
+
+@app.route("/count")
+def count():
+    """return length of data"""
+    count = db.songs.count_documents({})
+    return jsonify({"count": count}), 200
+
+@app.route("/song", methods=["GET"])
+def songs():
+    """Return all songs from the database"""
+    songs_list = list(db.songs.find({}))
+    return jsonify({"songs": parse_json(songs_list)}), 200
+
+
+@app.route("/song/<int:id>", methods=["GET"])
+def get_song_by_id(id):
+    song = db.songs.find_one({"id": id})
+    if song is None:
+        return jsonify({"message": "song with id not found"}), 404
+    return jsonify(parse_json(song)), 200
+
+@app.route("/song", methods=["POST"])
+def create_song():
+    try:
+        song = request.get_json()
+        if not song:
+            return jsonify({"message": "Invalid JSON"}), 400
+        if "id" not in song:
+            return jsonify({"message": "Missing id field"}), 400
+
+        existing = db.songs.find_one({"id": song["id"]})
+        if existing:
+            response = make_response(
+                jsonify({"Message": f"song with id {song['id']} already present"}),
+                302
+            )
+            response.headers['Location'] = url_for('get_song_by_id', id=song["id"])
+            return response
+
+        db.songs.insert_one(song)
+        # Fetch the inserted document (including _id)
+        inserted_song = db.songs.find_one({"id": song["id"]})
+        return jsonify(parse_json(inserted_song)), 201
+
+    except Exception as e:
+        return jsonify(f"Error in create_song: {str(e)}")
+        # return jsonify({"message": "Internal server error"}), 500
+
+@app.route("/song/<int:id>", methods=["PUT"])
+def update_song(id):
+    # Get update data from request
+    update_data = request.get_json()
+    if not update_data:
+        return jsonify({"message": "Invalid input"}), 400
+    
+    # Check if song exists
+    existing_song = db.songs.find_one({"id": id})
+    if not existing_song:
+        return jsonify({"message": "song not found"}), 404
+    
+    # Perform update
+    db.songs.update_one(
+        {"id": id},
+        {"$set": update_data}
+    )
+    
+    # Return updated song
+    updated_song = db.songs.find_one({"id": id})
+    return jsonify(parse_json(updated_song)), 200
+
+@app.route("/song/<int:id>", methods=["DELETE"])
+def delete_song(id):
+    # Delete the song from the database
+    result = db.songs.delete_one({"id": id})
+    
+    if result.deleted_count == 0:
+        return jsonify({"message": "song not found"}), 404
+    
+    return "", 204
+
+    
